@@ -2641,6 +2641,8 @@
   </script>
   <script>
     /* Book a demo dialog */
+    // Leads go to the Siletry backend, which saves them and alerts the team on WhatsApp
+    var LEADS_API = 'https://siletry-backend-new-production.up.railway.app/api/public/leads';
     (function () {
       var dlg = document.getElementById('demoDialog');
       if (!dlg || typeof dlg.showModal !== 'function') return;
@@ -2649,6 +2651,12 @@
       var formView = document.getElementById('demoFormView'), done = document.getElementById('demoDone');
       var phone = document.getElementById('dPhone');
       var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+      try {
+        var q0 = new URLSearchParams(location.search);
+        ['utm_source', 'utm_medium', 'utm_campaign'].forEach(function (k) { if (q0.get(k)) sessionStorage.setItem(k, q0.get(k)); });
+      } catch (e) {}
 
       function open(e) {
         if (e) e.preventDefault();
@@ -2703,15 +2711,22 @@
           phone: phone.value.replace(/\D/g, ''),
           city: form.city.value.trim(),
           clinic: form.clinic.value.trim(),
-          company_site: form.company_site.value
+          website: form.company_site.value,
+          source: 'website',
+          page: location.pathname + location.hash
         };
+        var q = new URLSearchParams(location.search);
+        ['utm_source', 'utm_medium', 'utm_campaign'].forEach(function (k) {
+          var v = q.get(k) || sessionStorageGet(k);
+          if (v) data[k.replace(/_(\w)/, function (_, c) { return c.toUpperCase(); })] = v.slice(0, 100);
+        });
         if (data.name.length < 2) return fail('Please enter your name.', form.name);
         if (!/^[6-9]\d{9}$/.test(data.phone)) return fail('Please enter a valid 10-digit mobile number.', phone);
         if (data.city.length < 2) return fail('Please enter your city.', form.city);
 
         btn.disabled = true;
         btn.innerHTML = '<span class="spin" aria-hidden="true"></span> Sending…';
-        fetch('/api/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+        fetch(LEADS_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
           .then(function (r) { return r.json().catch(function () { return { ok: false }; }).then(function (j) { j.status = r.status; return j; }); })
           .then(function (j) {
             if (j.ok) {
