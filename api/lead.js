@@ -1,10 +1,17 @@
 // POST /api/lead — "Book a demo" requests from siletry.com.
-// Sends the lead to Aman's WhatsApp through CallMeBot (free, self-notifications only).
+// Sends the lead to your WhatsApp through Meta's WhatsApp Cloud API, using an approved template.
 //
-// Vercel → Project → Settings → Environment Variables:
-//   CALLMEBOT_PHONE   your WhatsApp number with country code, digits only (e.g. 919876543210)
-//   CALLMEBOT_APIKEY  the key CallMeBot sends you after activation
+// Vercel → siletry-landing → Settings → Environment Variables:
+//   WA_TOKEN            permanent access token (System User token with whatsapp_business_messaging)
+//   WA_PHONE_NUMBER_ID  "Phone number ID" of your Siletry business number (WhatsApp → API Setup)
+//   LEAD_NOTIFY_TO      your personal WhatsApp number, digits only with 91 (e.g. 919876543210)
+//   WA_LEAD_TEMPLATE    template name (default: new_demo_lead)
+//   WA_LEAD_TEMPLATE_LANG  template language code (default: en)
+//
+// Template body, category Utility, 4 variables:
+//   New demo request on siletry.com. Name: {{1}}. WhatsApp: {{2}}. City: {{3}}. Clinic: {{4}}.
 
+const GRAPH = 'https://graph.facebook.com/v21.0';
 const hits = new Map(); // best-effort rate limit per warm instance
 
 function clean(v, max) {
@@ -48,41 +55,47 @@ module.exports = async (req, res) => {
   if (tooMany(ip)) return res.status(429).json({ ok: false, error: 'Too many requests. Please try again in a few minutes.' });
 
   const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
-  const lines = [
-    '*New demo request — siletry.com*',
-    '',
-    `Name: ${name}`,
-    `WhatsApp: +91 ${phone}`,
-    `City: ${city}`,
-    clinic ? `Clinic: ${clinic}` : null,
-    `Time: ${when}`,
-    '',
-    `Reply: https://wa.me/91${phone}`,
-  ].filter((l) => l !== null);
-
   // Backup copy in Vercel logs, in case WhatsApp delivery fails
   console.log('LEAD', JSON.stringify({ name, phone, city, clinic, when }));
 
-  const to = process.env.CALLMEBOT_PHONE;
-  const key = process.env.CALLMEBOT_APIKEY;
-  if (!to || !key) {
-    console.error('CALLMEBOT_PHONE / CALLMEBOT_APIKEY not set');
+  const token = process.env.WA_TOKEN;
+  const phoneId = process.env.WA_PHONE_NUMBER_ID;
+  const to = String(process.env.LEAD_NOTIFY_TO || '').replace(/\D/g, '');
+  if (!token || !phoneId || !to) {
+    console.error('WA_TOKEN / WA_PHONE_NUMBER_ID / LEAD_NOTIFY_TO not set');
     return res.status(500).json({ ok: false, error: 'not_configured' });
   }
 
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name: process.env.WA_LEAD_TEMPLATE || 'new_demo_lead',
+      language: { code: process.env.WA_LEAD_TEMPLATE_LANG || 'en' },
+      components: [{
+        type: 'body',
+        parameters: [name, `+91 ${phone}`, city, clinic || 'not given'].map((text) => ({ type: 'text', text })),
+      }],
+    },
+  };
+
   try {
-    const url = 'https://api.callmebot.com/whatsapp.php?phone=' + encodeURIComponent(to) +
-      '&text=' + encodeURIComponent(lines.join('\n')) + '&apikey=' + encodeURIComponent(key);
-    const r = await fetch(url, { signal: AbortSignal.timeout(9000) });
-    const text = await r.text();
+    const r = await fetch(`${GRAPH}/${encodeURIComponent(phoneId)}/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(9000),
+    });
+    const out = await r.json().catch(() => ({}));
     if (!r.ok) {
-      console.error('CallMeBot failed', r.status, text.slice(0, 300));
+      console.error('Meta send failed', r.status, JSON.stringify(out.error || out).slice(0, 500));
       return res.status(502).json({ ok: false, error: 'send_failed' });
     }
-    console.log('CallMeBot', r.status, text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200));
+    console.log('Meta sent', out.messages && out.messages[0] && out.messages[0].id);
     return res.status(200).json({ ok: true });
   } catch (e) {
-    console.error('CallMeBot error', e && e.message);
+    console.error('Meta send error', e && e.message);
     return res.status(502).json({ ok: false, error: 'send_failed' });
   }
 };
