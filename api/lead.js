@@ -1,15 +1,19 @@
 // POST /api/lead — "Book a demo" requests from siletry.com.
-// Sends the lead to your WhatsApp through Meta's WhatsApp Cloud API, using an approved template.
+// Sends the lead to your WhatsApp through Meta's WhatsApp Cloud API.
+//
+// Default: a plain text message. Meta only delivers plain text if LEAD_NOTIFY_TO has messaged
+// the business number in the last 24 hours, so message it once a day.
+// Later: create an approved template and set WA_LEAD_TEMPLATE to switch to template mode.
 //
 // Vercel → siletry-landing → Settings → Environment Variables:
 //   WA_TOKEN            permanent access token (System User token with whatsapp_business_messaging)
 //   WA_PHONE_NUMBER_ID  "Phone number ID" of your Siletry business number (WhatsApp → API Setup)
 //   LEAD_NOTIFY_TO      your personal WhatsApp number, digits only with 91 (e.g. 919876543210)
-//   WA_LEAD_TEMPLATE    template name (default: new_demo_lead)
-//   WA_LEAD_TEMPLATE_LANG  template language code (default: en)
+//   WA_LEAD_TEMPLATE    (optional) approved template name, e.g. new_demo_lead. Unset = plain text.
+//   WA_LEAD_TEMPLATE_LANG  (optional) template language code (default: en)
 //
-// Template body, category Utility, 4 variables:
-//   New demo request on siletry.com. Name: {{1}}. WhatsApp: {{2}}. City: {{3}}. Clinic: {{4}}.
+// Template body (category Utility), when you create it:
+//   💬 New Demo Request\n\nName: {{1}}\nWhatsApp: {{2}}\nCity: {{3}}\nClinic: {{4}}\n\nContact them within a few hours to book their demo.
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
 const hits = new Map(); // best-effort rate limit per warm instance
@@ -66,19 +70,35 @@ module.exports = async (req, res) => {
     return res.status(500).json({ ok: false, error: 'not_configured' });
   }
 
-  const payload = {
-    messaging_product: 'whatsapp',
-    to,
-    type: 'template',
-    template: {
-      name: process.env.WA_LEAD_TEMPLATE || 'new_demo_lead',
-      language: { code: process.env.WA_LEAD_TEMPLATE_LANG || 'en' },
-      components: [{
-        type: 'body',
-        parameters: [name, `+91 ${phone}`, city, clinic || 'not given'].map((text) => ({ type: 'text', text })),
-      }],
-    },
-  };
+  const template = process.env.WA_LEAD_TEMPLATE;
+  const text = [
+    '💬 New Demo Request',
+    '',
+    `Name: ${name}`,
+    `WhatsApp: +91${phone}`,
+    `City: ${city}`,
+    clinic ? `Clinic: ${clinic}` : null,
+    `Time: ${when}`,
+    '',
+    'Contact them within a few hours to book their demo.',
+    `https://wa.me/91${phone}`,
+  ].filter((l) => l !== null).join('\n');
+
+  const payload = template
+    ? {
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: {
+          name: template,
+          language: { code: process.env.WA_LEAD_TEMPLATE_LANG || 'en' },
+          components: [{
+            type: 'body',
+            parameters: [name, `+91 ${phone}`, city, clinic || 'not given'].map((t) => ({ type: 'text', text: t })),
+          }],
+        },
+      }
+    : { messaging_product: 'whatsapp', to, type: 'text', text: { preview_url: false, body: text } };
 
   try {
     const r = await fetch(`${GRAPH}/${encodeURIComponent(phoneId)}/messages`, {
